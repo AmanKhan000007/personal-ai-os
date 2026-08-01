@@ -8,7 +8,8 @@ CREATE INDEX IF NOT EXISTS idx_conv_sender ON conversations(sender_id,created_at
 CREATE TABLE IF NOT EXISTS memories (id INTEGER PRIMARY KEY AUTOINCREMENT,owner_id TEXT NOT NULL,content TEXT NOT NULL,category TEXT NOT NULL DEFAULT 'general',importance REAL NOT NULL DEFAULT 0.5,confidence REAL NOT NULL DEFAULT 1.0,source TEXT NOT NULL DEFAULT 'chat',access_count INTEGER NOT NULL DEFAULT 0,last_accessed TEXT,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,UNIQUE(owner_id,content));
 CREATE INDEX IF NOT EXISTS idx_mem_owner ON memories(owner_id,importance DESC,updated_at DESC);
 CREATE TABLE IF NOT EXISTS memory_embeddings (memory_id INTEGER PRIMARY KEY,vector TEXT NOT NULL,FOREIGN KEY(memory_id) REFERENCES memories(id) ON DELETE CASCADE);
-CREATE TABLE IF NOT EXISTS documents (id INTEGER PRIMARY KEY AUTOINCREMENT,owner_id TEXT NOT NULL,original_name TEXT NOT NULL,stored_name TEXT NOT NULL,path TEXT NOT NULL,mime_type TEXT,size_bytes INTEGER NOT NULL,extracted_text TEXT NOT NULL DEFAULT '',created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS documents (id INTEGER PRIMARY KEY AUTOINCREMENT,owner_id TEXT NOT NULL,original_name TEXT NOT NULL,stored_name TEXT NOT NULL,path TEXT NOT NULL,mime_type TEXT,size_bytes INTEGER NOT NULL,extracted_text TEXT NOT NULL DEFAULT '',label TEXT NOT NULL DEFAULT '',created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE INDEX IF NOT EXISTS idx_documents_owner_label ON documents(owner_id,label,created_at);
 CREATE TABLE IF NOT EXISTS document_chunks (id INTEGER PRIMARY KEY AUTOINCREMENT,document_id INTEGER NOT NULL,chunk_index INTEGER NOT NULL,content TEXT NOT NULL,FOREIGN KEY(document_id) REFERENCES documents(id) ON DELETE CASCADE);
 CREATE INDEX IF NOT EXISTS idx_chunks_doc ON document_chunks(document_id,chunk_index);
 CREATE TABLE IF NOT EXISTS chunk_embeddings (chunk_id INTEGER PRIMARY KEY,vector TEXT NOT NULL,FOREIGN KEY(chunk_id) REFERENCES document_chunks(id) ON DELETE CASCADE);
@@ -34,3 +35,6 @@ def init_db():
   if 'recurrence' not in task_cols:conn.execute("ALTER TABLE tasks ADD COLUMN recurrence TEXT")
   media_cols={r['name'] for r in conn.execute("PRAGMA table_info(media)").fetchall()}
   if 'label' not in media_cols:conn.execute("ALTER TABLE media ADD COLUMN label TEXT NOT NULL DEFAULT ''")
+  document_cols={r['name'] for r in conn.execute("PRAGMA table_info(documents)").fetchall()}
+  if 'label' not in document_cols:conn.execute("ALTER TABLE documents ADD COLUMN label TEXT NOT NULL DEFAULT ''")
+  conn.execute("CREATE INDEX IF NOT EXISTS idx_documents_owner_label ON documents(owner_id,label,created_at)")
