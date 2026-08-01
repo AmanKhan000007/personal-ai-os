@@ -16,6 +16,7 @@ from .summarizer import consolidate_conversation
 from .reminders import reminder_worker
 from .proactive import daily_brief_worker
 from .media_memory import clean_model_text,label_from_caption,followup_label,media_request,find_media,set_media_details,rename_latest_media
+from .document_memory import document_label,followup_document_label,document_request,find_document,set_document_label,rename_latest_document
 app=FastAPI(title=APP_NAME);init_db()
 @app.on_event("startup")
 async def start_background_services():
@@ -50,16 +51,26 @@ async def tg_send_photo(chat_id,path,caption=""):
   r.raise_for_status();result=r.json()
  if not result.get("ok"):raise RuntimeError(str(result))
  return result.get("result")
+async def tg_send_document(chat_id,path,filename=None,caption=""):
+ path=Path(path)
+ if not path.exists():raise FileNotFoundError(str(path))
+ data={"chat_id":str(chat_id)};caption=clean_model_text(caption)[:1000]
+ if caption:data["caption"]=caption
+ async with httpx.AsyncClient(timeout=120) as client:
+  with path.open("rb") as f:r=await client.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendDocument",data=data,files={"document":(filename or path.name,f,"application/octet-stream")})
+  r.raise_for_status();result=r.json()
+ if not result.get("ok"):raise RuntimeError(str(result))
+ return result.get("result")
 async def tg_download(file_id):
  info=await tg_api("getFile",{"file_id":file_id});file_path=info["file_path"]
  async with httpx.AsyncClient(timeout=90) as client:r=await client.get(f"https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}/{file_path}");r.raise_for_status();return r.content,file_path
-async def index_file(owner_id,original,data,mime="application/octet-stream"):
+async def index_file(owner_id,original,data,mime="application/octet-stream",label=""):
  ext=Path(original).suffix.lower()
  if ext not in ALLOWED:raise ValueError(f"Unsupported file type {ext}. Allowed: {', '.join(sorted(ALLOWED))}")
  if len(data)>MAX_UPLOAD_BYTES:raise ValueError("File is too large")
  stored=f"{uuid.uuid4().hex}{ext}";path=UPLOAD_DIR/stored;path.write_bytes(data);text=extract_text(path)
  with db() as c:
-  cur=c.execute("INSERT INTO documents(owner_id,original_name,stored_name,path,mime_type,size_bytes,extracted_text) VALUES(?,?,?,?,?,?,?)",(str(owner_id),original,stored,str(path),mime,len(data),text));doc_id=cur.lastrowid;chunk_rows=[]
+  cur=c.execute("INSERT INTO documents(owner_id,original_name,stored_name,path,mime_type,size_bytes,extracted_text,label) VALUES(?,?,?,?,?,?,?,?)",(str(owner_id),original,stored,str(path),mime,len(data),text,label or ""));doc_id=cur.lastrowid;chunk_rows=[]
   for i,ch in enumerate(chunks(text)):
    cc=c.execute("INSERT INTO document_chunks(document_id,chunk_index,content) VALUES(?,?,?)",(doc_id,i,ch));chunk_rows.append((cc.lastrowid,ch))
  for cid,ch in chunk_rows:index_chunk_embedding(cid,ch)
@@ -133,8 +144,7 @@ async def telegram_webhook(req:Request):
    await tg_send(chat_id,f"🎙️ {transcript}");answer=await process_text("telegram",sender,transcript);await tg_send(chat_id,answer);return {"ok":True}
   if msg.get("photo"):
    label=label_from_caption(caption);data,_=await tg_download(msg["photo"][-1]["file_id"]);path=await save_media(sender,"image","telegram-photo.jpg",data,"image/jpeg",label=label);description=clean_model_text(await describe_image(path,"Describe the image objectively. Do not discuss whether you can save files. Extract useful visible text if present."));set_media_details(path,label,description)
-   save_memory(sender,f"Photo '{label or 'received image'}': {description}",category="image",importance=.7 if label else .55,source="vision")
-   await tg_send(chat_id,(f"✅ Saved as \"{label}\".\n\n" if label else "")+description);return {"ok":True}
+   save_memory(sender,f"Photo '{label or 'received image'}': {description}",category="image",importance=.7 if label else .55,source="vision");await tg_send(chat_id,(f"✅ Saved as \"{label}\".\n\n" if label else "")+description);return {"ok":True}
   if msg.get("document"):
    d=msg["document"];original=Path(d.get("file_name") or "document").name;ext=Path(original).suffix.lower();data,_=await tg_download(d["file_id"])
    if ext in IMAGE_EXTENSIONS:
@@ -144,16 +154,26 @@ async def telegram_webhook(req:Request):
     with db() as c:c.execute("UPDATE media SET description=? WHERE path=?",(transcript,str(path)))
     await tg_send(chat_id,f"🎙️ {transcript}");answer=await process_text("telegram",sender,caption or transcript);await tg_send(chat_id,answer);return {"ok":True}
    if ext not in ALLOWED:await tg_send(chat_id,f"Unsupported document type {ext}. Allowed documents: {', '.join(sorted(ALLOWED))}");return {"ok":True}
-   doc_id,chars=await index_file(sender,original,data,d.get("mime_type",""));log("telegram",sender,"upload",original);await tg_send(chat_id,f"✅ Indexed {original}\nDocument ID: {doc_id}\nCharacters indexed: {chars}\n\nYou can now ask me questions about it.")
-   if caption:answer=await process_text("telegram",sender,caption);await tg_send(chat_id,answer)
+   label=document_label(caption);doc_id,chars=await index_file(sender,original,data,d.get("mime_type",""),label=label);log("telegram",sender,"upload",original)
+   await tg_send(chat_id,(f"✅ Indexed and saved as \"{label}\".\n" if label else f"✅ Indexed {original}\n")+f"Document ID: {doc_id}\nCharacters indexed: {chars}\n\nYou can now ask me questions about it.")
+   if label:save_memory(sender,f"Document '{label}' refers to uploaded file '{original}'.",category="document",importance=.8,source="explicit")
+   elif caption:answer=await process_text("telegram",sender,caption);await tg_send(chat_id,answer)
    return {"ok":True}
   text=(msg.get("text") or "").strip()
   if text:
+   new_doc_label=followup_document_label(text)
+   if new_doc_label:
+    item=rename_latest_document(sender,new_doc_label)
+    if item:save_memory(sender,f"The most recently uploaded document is named '{new_doc_label}' and its file is '{item['original_name']}'.",category="document",importance=.8,source="explicit");await tg_send(chat_id,f"✅ Saved the last document as \"{new_doc_label}\".");return {"ok":True}
+    await tg_send(chat_id,"I don't have a recent document to name yet.");return {"ok":True}
+   doc_query=document_request(text)
+   if doc_query:
+    item=find_document(sender,doc_query)
+    if item and Path(item['path']).exists():await tg_send_document(chat_id,item['path'],item['original_name'],f"📄 {item['label'] or item['original_name']}");log("telegram",sender,"document_retrieval",doc_query);return {"ok":True}
    new_label=followup_label(text)
    if new_label:
     item=rename_latest_media(sender,new_label)
-    if item:
-     save_memory(sender,f"The most recently received photo is named '{new_label}'.",category="image",importance=.8,source="explicit");await tg_send(chat_id,f"✅ Saved the last photo as \"{new_label}\".");return {"ok":True}
+    if item:save_memory(sender,f"The most recently received photo is named '{new_label}'.",category="image",importance=.8,source="explicit");await tg_send(chat_id,f"✅ Saved the last photo as \"{new_label}\".");return {"ok":True}
     await tg_send(chat_id,"I don't have a recent photo to name yet.");return {"ok":True}
    query=media_request(text)
    if query:
@@ -167,4 +187,4 @@ async def telegram_webhook(req:Request):
   if chat_id:await tg_send(chat_id,f"I couldn't process that request. Server error: {type(e).__name__}")
   return {"ok":True}
 @app.get("/health")
-def health():return {"ok":True,"app":APP_NAME,"telegram_configured":bool(TELEGRAM_BOT_TOKEN and TELEGRAM_OWNER_ID),"provider":os.getenv("LLM_PROVIDER","gemini"),"semantic_memory":True,"vision":True,"voice":True,"dashboard":True,"commands":True,"cross_media_search":True,"memory_consolidation":True,"active_reminders":True,"automatic_daily_brief":DAILY_BRIEF_ENABLED,"named_media_retrieval":True,"conversational_media_context":True}
+def health():return {"ok":True,"app":APP_NAME,"telegram_configured":bool(TELEGRAM_BOT_TOKEN and TELEGRAM_OWNER_ID),"provider":os.getenv("LLM_PROVIDER","gemini"),"semantic_memory":True,"vision":True,"voice":True,"dashboard":True,"commands":True,"cross_media_search":True,"memory_consolidation":True,"active_reminders":True,"automatic_daily_brief":DAILY_BRIEF_ENABLED,"named_media_retrieval":True,"conversational_media_context":True,"named_document_retrieval":True}
