@@ -2,10 +2,13 @@ from .db import db
 from .tasks import task_command
 from .briefing import daily_brief
 from .system_health import health_text
+from .backups import create_backup,backup_status,BACKUP_DIR
 HELP="""Personal AI OS commands:
 /help - show commands
 /status - system knowledge counts
 /system - storage/database integrity check
+/backup - create a backup now
+/backups - show backup status and recent backups
 /brief - today's personal briefing
 /memory - show recent saved memories
 /files - show indexed documents
@@ -28,6 +31,14 @@ def command_response(owner_id,text):
  cmd=text.strip().split()[0].lower() if text.strip() else ""
  if cmd=="/help":return HELP
  if cmd=="/system":return health_text()
+ if cmd=="/backup":
+  try:
+   p=create_backup();return f"Backup created successfully.\n{p.name}\n{p.stat().st_size/1024/1024:.2f} MB" if p else "Backup could not be created because the database does not exist."
+  except Exception as e:return f"Backup failed: {type(e).__name__}: {e}"
+ if cmd=="/backups":
+  files=sorted(BACKUP_DIR.glob('personal-ai-os-backup-*.zip'),reverse=True)[:10]
+  listing='\n'.join(f"• {p.name} — {p.stat().st_size/1024/1024:.2f} MB" for p in files) if files else 'No backups found.'
+  return backup_status()+"\n\nRecent backups:\n"+listing
  if cmd=="/brief":return daily_brief(owner_id)
  if cmd=="/status":
   with db() as c:
