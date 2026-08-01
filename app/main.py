@@ -2,14 +2,15 @@ import os,html,uuid
 from pathlib import Path
 import httpx
 from fastapi import FastAPI,Request,UploadFile,File,Form,Header,HTTPException
-from fastapi.responses import HTMLResponse,FileResponse
+from fastapi.responses import HTMLResponse,FileResponse,RedirectResponse
 from .config import APP_NAME,ADMIN_TOKEN,UPLOAD_DIR,MAX_UPLOAD_BYTES,TELEGRAM_OWNER_ID,TELEGRAM_BOT_TOKEN
 from .db import init_db,db
 from .storage import extract_text,chunks,ALLOWED
 from .memory import save_memory,explicit_memory,auto_memory_candidates,forget_target,forget_memories,index_chunk_embedding
 from .llm import ask
 from .vision import describe_image,IMAGE_EXTENSIONS
-
+from .voice import transcribe_audio,AUDIO_EXTENSIONS
+from .dashboard import dashboard_html
 app=FastAPI(title=APP_NAME);init_db()
 def admin_ok(token):return bool(ADMIN_TOKEN and token==ADMIN_TOKEN)
 def log(channel,sender,event,detail=""):
@@ -32,20 +33,17 @@ async def index_file(owner_id,original,data,mime="application/octet-stream"):
  if len(data)>MAX_UPLOAD_BYTES:raise ValueError("File is too large")
  stored=f"{uuid.uuid4().hex}{ext}";path=UPLOAD_DIR/stored;path.write_bytes(data);text=extract_text(path)
  with db() as c:
-  cur=c.execute("INSERT INTO documents(owner_id,original_name,stored_name,path,mime_type,size_bytes,extracted_text) VALUES(?,?,?,?,?,?,?)",(str(owner_id),original,stored,str(path),mime,len(data),text));doc_id=cur.lastrowid
-  chunk_rows=[]
+  cur=c.execute("INSERT INTO documents(owner_id,original_name,stored_name,path,mime_type,size_bytes,extracted_text) VALUES(?,?,?,?,?,?,?)",(str(owner_id),original,stored,str(path),mime,len(data),text));doc_id=cur.lastrowid;chunk_rows=[]
   for i,ch in enumerate(chunks(text)):
    cc=c.execute("INSERT INTO document_chunks(document_id,chunk_index,content) VALUES(?,?,?)",(doc_id,i,ch));chunk_rows.append((cc.lastrowid,ch))
  for cid,ch in chunk_rows:index_chunk_embedding(cid,ch)
  return doc_id,len(text)
-async def save_image(owner_id,original,data,mime,prompt):
- ext=Path(original).suffix.lower() or ".jpg";stored=f"{uuid.uuid4().hex}{ext}";path=UPLOAD_DIR/stored;path.write_bytes(data)
- description=await describe_image(path,prompt or "Describe this image carefully. Extract all useful visible text and important details.")
- with db() as c:c.execute("INSERT INTO media(owner_id,media_type,original_name,stored_name,path,mime_type,size_bytes,description) VALUES(?,?,?,?,?,?,?,?)",(str(owner_id),"image",original,stored,str(path),mime,len(data),description))
- return description
+async def save_media(owner_id,media_type,original,data,mime,description=""):
+ ext=Path(original).suffix.lower();stored=f"{uuid.uuid4().hex}{ext}";path=UPLOAD_DIR/stored;path.write_bytes(data)
+ with db() as c:c.execute("INSERT INTO media(owner_id,media_type,original_name,stored_name,path,mime_type,size_bytes,description) VALUES(?,?,?,?,?,?,?,?)",(str(owner_id),media_type,original,stored,str(path),mime,len(data),description))
+ return path
 async def process_text(channel,owner_id,text):
- save_chat(channel,owner_id,"user",text)
- forget=forget_target(text)
+ save_chat(channel,owner_id,"user",text);forget=forget_target(text)
  if forget:
   n=forget_memories(owner_id,forget);answer=f"Forgot {n} matching memory item(s)." if n else "I couldn't find a matching saved memory to forget.";save_chat(channel,owner_id,"assistant",answer);return answer
  explicit=explicit_memory(text)
@@ -53,9 +51,18 @@ async def process_text(channel,owner_id,text):
  else:
   for candidate in auto_memory_candidates(text):save_memory(owner_id,candidate,importance=.7,confidence=.85,source="automatic")
  answer,provider=await ask(owner_id,text);save_chat(channel,owner_id,"assistant",answer);log(channel,owner_id,"chat",provider);return answer
-CSS="body{font-family:Arial,sans-serif;background:#f5f6f8;color:#18202a;margin:0}.wrap{max-width:900px;margin:40px auto;padding:18px}.card{background:white;padding:22px;border-radius:14px;margin:16px 0;border:1px solid #ddd}textarea,input{box-sizing:border-box;width:100%;padding:12px;margin:6px 0;border:1px solid #bbb;border-radius:8px}button{padding:12px 20px;background:#18202a;color:white;border:0;border-radius:8px}pre{white-space:pre-wrap}.muted{color:#66717e}"
+CSS="body{font-family:Arial,sans-serif;background:#f5f6f8;color:#18202a;margin:0}.wrap{max-width:900px;margin:40px auto;padding:18px}.card{background:white;padding:22px;border-radius:14px;margin:16px 0;border:1px solid #ddd}textarea,input{box-sizing:border-box;width:100%;padding:12px;margin:6px 0;border:1px solid #bbb;border-radius:8px}button{padding:12px 20px;background:#18202a;color:white;border:0;border-radius:8px}pre{white-space:pre-wrap}.muted{color:#66717e}a{color:#174ea6}"
 @app.get("/",response_class=HTMLResponse)
-def home():return f"<html><head><meta name=viewport content='width=device-width'><style>{CSS}</style></head><body><div class=wrap><h1>{html.escape(APP_NAME)}</h1><p class=muted>Private AI with semantic memory, documents and Telegram vision.</p><div class=card><h2>Chat</h2><form method=post action=/playground><textarea name=message required></textarea><input type=password name=admin_token required placeholder='Admin token'><button>Ask</button></form></div><div class=card><h2>Upload document</h2><form method=post action=/upload enctype=multipart/form-data><input type=file name=file required><input type=password name=admin_token required placeholder='Admin token'><button>Upload</button></form></div></div></body></html>"
+def home():return f"<html><head><meta name=viewport content='width=device-width'><style>{CSS}</style></head><body><div class=wrap><h1>{html.escape(APP_NAME)}</h1><p class=muted>Private AI with semantic memory, documents, vision and voice.</p><div class=card><h2>Chat</h2><form method=post action=/playground><textarea name=message required></textarea><input type=password name=admin_token required placeholder='Admin token'><button>Ask</button></form></div><div class=card><h2>Upload document</h2><form method=post action=/upload enctype=multipart/form-data><input type=file name=file required><input type=password name=admin_token required placeholder='Admin token'><button>Upload</button></form></div><div class=card><h2>Dashboard</h2><form method=get action=/dashboard><input type=password name=admin_token required placeholder='Admin token'><button>Open Dashboard</button></form></div></div></body></html>"
+@app.get("/dashboard",response_class=HTMLResponse)
+def dashboard(admin_token:str):
+ if not admin_ok(admin_token):raise HTTPException(401,"Invalid admin token")
+ return dashboard_html(admin_token)
+@app.post("/dashboard/memory/{memory_id}/delete")
+def delete_memory(memory_id:int,admin_token:str=Form(...)):
+ if not admin_ok(admin_token):raise HTTPException(401,"Invalid admin token")
+ with db() as c:c.execute("DELETE FROM memories WHERE id=?",(memory_id,))
+ return RedirectResponse(f"/dashboard?admin_token={admin_token}",status_code=303)
 @app.post("/playground",response_class=HTMLResponse)
 async def playground(message:str=Form(...),admin_token:str=Form(...)):
  if not admin_ok(admin_token):raise HTTPException(401,"Invalid admin token")
@@ -85,15 +92,25 @@ async def telegram_webhook(req:Request):
   return {"ok":True}
  try:
   caption=(msg.get("caption") or "").strip()
+  if msg.get("voice") or msg.get("audio"):
+   a=msg.get("voice") or msg.get("audio");data,file_path=await tg_download(a["file_id"]);ext=Path(file_path).suffix.lower() or ".ogg";original=a.get("file_name") or f"telegram-voice{ext}";path=await save_media(sender,"audio",original,data,a.get("mime_type","audio/ogg"));transcript=await transcribe_audio(path)
+   with db() as c:c.execute("UPDATE media SET description=? WHERE path=?",(transcript,str(path)))
+   await tg_send(chat_id,f"🎙️ {transcript}");answer=await process_text("telegram",sender,transcript);await tg_send(chat_id,answer);return {"ok":True}
   if msg.get("photo"):
-   photo=msg["photo"][-1];data,_=await tg_download(photo["file_id"]);description=await save_image(sender,"telegram-photo.jpg",data,"image/jpeg",caption)
-   save_memory(sender,f"Image received: {description}",category="image",importance=.55,confidence=.9,source="vision")
-   await tg_send(chat_id,description);return {"ok":True}
+   data,_=await tg_download(msg["photo"][-1]["file_id"]);path=await save_media(sender,"image","telegram-photo.jpg",data,"image/jpeg");description=await describe_image(path,caption or "Describe this image carefully and extract useful visible text.")
+   with db() as c:c.execute("UPDATE media SET description=? WHERE path=?",(description,str(path)))
+   save_memory(sender,f"Image received: {description}",category="image",importance=.55,source="vision");await tg_send(chat_id,description);return {"ok":True}
   if msg.get("document"):
    d=msg["document"];original=Path(d.get("file_name") or "document").name;ext=Path(original).suffix.lower();data,_=await tg_download(d["file_id"])
    if ext in IMAGE_EXTENSIONS:
-    description=await save_image(sender,original,data,d.get("mime_type","image/jpeg"),caption);save_memory(sender,f"Image {original}: {description}",category="image",importance=.55,source="vision");await tg_send(chat_id,description);return {"ok":True}
-   if ext not in ALLOWED:await tg_send(chat_id,f"Unsupported document type {ext}. Allowed: {', '.join(sorted(ALLOWED))}");return {"ok":True}
+    path=await save_media(sender,"image",original,data,d.get("mime_type","image/jpeg"));description=await describe_image(path,caption or "Describe this image carefully and extract useful visible text.")
+    with db() as c:c.execute("UPDATE media SET description=? WHERE path=?",(description,str(path)))
+    save_memory(sender,f"Image {original}: {description}",category="image",importance=.55,source="vision");await tg_send(chat_id,description);return {"ok":True}
+   if ext in AUDIO_EXTENSIONS:
+    path=await save_media(sender,"audio",original,data,d.get("mime_type","audio/ogg"));transcript=await transcribe_audio(path)
+    with db() as c:c.execute("UPDATE media SET description=? WHERE path=?",(transcript,str(path)))
+    await tg_send(chat_id,f"🎙️ {transcript}");answer=await process_text("telegram",sender,caption or transcript);await tg_send(chat_id,answer);return {"ok":True}
+   if ext not in ALLOWED:await tg_send(chat_id,f"Unsupported document type {ext}. Allowed documents: {', '.join(sorted(ALLOWED))}");return {"ok":True}
    doc_id,chars=await index_file(sender,original,data,d.get("mime_type",""));log("telegram",sender,"upload",original);await tg_send(chat_id,f"✅ Indexed {original}\nDocument ID: {doc_id}\nCharacters indexed: {chars}\n\nYou can now ask me questions about it.")
    if caption:answer=await process_text("telegram",sender,caption);await tg_send(chat_id,answer)
    return {"ok":True}
@@ -105,4 +122,4 @@ async def telegram_webhook(req:Request):
   if chat_id:await tg_send(chat_id,f"I couldn't process that request. Server error: {type(e).__name__}")
   return {"ok":True}
 @app.get("/health")
-def health():return {"ok":True,"app":APP_NAME,"telegram_configured":bool(TELEGRAM_BOT_TOKEN and TELEGRAM_OWNER_ID),"provider":os.getenv("LLM_PROVIDER","gemini"),"semantic_memory":True,"vision":True}
+def health():return {"ok":True,"app":APP_NAME,"telegram_configured":bool(TELEGRAM_BOT_TOKEN and TELEGRAM_OWNER_ID),"provider":os.getenv("LLM_PROVIDER","gemini"),"semantic_memory":True,"vision":True,"voice":True,"dashboard":True}
