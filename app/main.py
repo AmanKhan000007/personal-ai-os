@@ -183,11 +183,12 @@ async def telegram_webhook(req:Request):
     item=find_media(sender,query)
     if item and Path(item['path']).exists():await tg_send_photo(chat_id,item['path'],f"📷 {item['label'] or item['original_name']}");log("telegram",sender,"media_retrieval",query);return {"ok":True}
     await tg_send(chat_id,f"I couldn't find a saved photo matching \"{query}\".");return {"ok":True}
-   answer=await process_text("telegram",sender,text);await tg_send(chat_id,answer)
+   answer=await process_text("telegram",sender,text)
+   if answer and not answer.startswith("IMAGE_SENT:"):await tg_send(chat_id,answer)
   return {"ok":True}
  except Exception as e:
   log("telegram",sender,"error",str(e))
   if chat_id:await tg_send(chat_id,f"I couldn't process that request. Server error: {type(e).__name__}")
   return {"ok":True}
 @app.get("/health")
-def health():return {"ok":True,"app":APP_NAME,"telegram_configured":bool(TELEGRAM_BOT_TOKEN and TELEGRAM_OWNER_ID),"provider":os.getenv("LLM_PROVIDER","gemini"),"semantic_memory":True,"vision":True,"voice":True,"dashboard":True,"commands":True,"cross_media_search":True,"memory_consolidation":True,"active_reminders":True,"automatic_daily_brief":DAILY_BRIEF_ENABLED,"named_media_retrieval":True,"conversational_media_context":True,"named_document_retrieval":True,"smart_memory_quality":True,"automatic_backup":AUTO_BACKUP_ENABLED}
+def health():return {"ok":True,"app":APP_NAME,"telegram_configured":bool(TELEGRAM_BOT_TOKEN and TELEGRAM_OWNER_ID),"provider":os.getenv("LLM_PROVIDER","gemini"),"semantic_memory":True,"vision":True,"voice":True,"dashboard":True,"commands":True,"cross_media_search":True,"memory_consolidation":True,"active_reminders":True,"automatic_daily_brief":DAILY_BRIEF_ENABLED,"named_media_retrieval":True,"conversational_media_context":True,"named_document_retrieval":True,"smart_memory_quality":True,"automatic_backup":AUTO_BACKUP_ENABLED,"image_generation":True}
