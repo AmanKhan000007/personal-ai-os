@@ -18,6 +18,10 @@ CREATE TABLE IF NOT EXISTS memories (
  UNIQUE(owner_id, content)
 );
 CREATE INDEX IF NOT EXISTS idx_mem_owner ON memories(owner_id, importance DESC, updated_at DESC);
+CREATE TABLE IF NOT EXISTS memory_embeddings (
+ memory_id INTEGER PRIMARY KEY, vector TEXT NOT NULL,
+ FOREIGN KEY(memory_id) REFERENCES memories(id) ON DELETE CASCADE
+);
 CREATE TABLE IF NOT EXISTS documents (
  id INTEGER PRIMARY KEY AUTOINCREMENT, owner_id TEXT NOT NULL, original_name TEXT NOT NULL,
  stored_name TEXT NOT NULL, path TEXT NOT NULL, mime_type TEXT, size_bytes INTEGER NOT NULL,
@@ -28,6 +32,16 @@ CREATE TABLE IF NOT EXISTS document_chunks (
  content TEXT NOT NULL, FOREIGN KEY(document_id) REFERENCES documents(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_chunks_doc ON document_chunks(document_id, chunk_index);
+CREATE TABLE IF NOT EXISTS chunk_embeddings (
+ chunk_id INTEGER PRIMARY KEY, vector TEXT NOT NULL,
+ FOREIGN KEY(chunk_id) REFERENCES document_chunks(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS media (
+ id INTEGER PRIMARY KEY AUTOINCREMENT, owner_id TEXT NOT NULL, media_type TEXT NOT NULL,
+ original_name TEXT NOT NULL, stored_name TEXT NOT NULL, path TEXT NOT NULL, mime_type TEXT,
+ size_bytes INTEGER NOT NULL, description TEXT NOT NULL DEFAULT '',
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 CREATE TABLE IF NOT EXISTS audit_logs (
  id INTEGER PRIMARY KEY AUTOINCREMENT, channel TEXT NOT NULL, sender_id TEXT NOT NULL,
  event TEXT NOT NULL, detail TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
