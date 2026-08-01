@@ -1,8 +1,10 @@
 from .db import db
 from .tasks import task_command
+from .briefing import daily_brief
 HELP="""Personal AI OS commands:
 /help - show commands
 /status - system knowledge counts
+/brief - today's personal briefing
 /memory - show recent saved memories
 /files - show indexed documents
 /media - show recent images/audio
@@ -15,12 +17,15 @@ HELP="""Personal AI OS commands:
 
 Natural-language controls:
 Remember that ...
-Forget ..."""
+Forget ...
+Remind me to ... tomorrow at 5 pm
+Remind me to ... every day at 9 am"""
 def command_response(owner_id,text):
  task=task_command(owner_id,text)
  if task is not None:return task
  cmd=text.strip().split()[0].lower() if text.strip() else ""
  if cmd=="/help":return HELP
+ if cmd=="/brief":return daily_brief(owner_id)
  if cmd=="/status":
   with db() as c:
    m=c.execute("SELECT COUNT(*) n FROM memories WHERE owner_id=?",(str(owner_id),)).fetchone()["n"];d=c.execute("SELECT COUNT(*) n FROM documents WHERE owner_id=?",(str(owner_id),)).fetchone()["n"];media=c.execute("SELECT COUNT(*) n FROM media WHERE owner_id=?",(str(owner_id),)).fetchone()["n"];conv=c.execute("SELECT COUNT(*) n FROM conversations WHERE sender_id=?",(str(owner_id),)).fetchone()["n"];tasks=c.execute("SELECT COUNT(*) n FROM tasks WHERE owner_id=? AND status='open'",(str(owner_id),)).fetchone()["n"]
