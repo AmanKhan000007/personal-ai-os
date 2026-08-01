@@ -15,7 +15,7 @@ from .commands import command_response
 from .summarizer import consolidate_conversation
 from .reminders import reminder_worker
 from .proactive import daily_brief_worker
-from .media_memory import clean_model_text,label_from_caption,media_request,find_media,set_media_details
+from .media_memory import clean_model_text,label_from_caption,followup_label,media_request,find_media,set_media_details,rename_latest_media
 app=FastAPI(title=APP_NAME);init_db()
 @app.on_event("startup")
 async def start_background_services():
@@ -43,8 +43,7 @@ async def tg_send(chat_id,text):
 async def tg_send_photo(chat_id,path,caption=""):
  path=Path(path)
  if not path.exists():raise FileNotFoundError(str(path))
- data={"chat_id":str(chat_id)}
- caption=clean_model_text(caption)[:1000]
+ data={"chat_id":str(chat_id)};caption=clean_model_text(caption)[:1000]
  if caption:data["caption"]=caption
  async with httpx.AsyncClient(timeout=90) as client:
   with path.open("rb") as f:r=await client.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto",data=data,files={"photo":(path.name,f,"application/octet-stream")})
@@ -134,17 +133,12 @@ async def telegram_webhook(req:Request):
    await tg_send(chat_id,f"🎙️ {transcript}");answer=await process_text("telegram",sender,transcript);await tg_send(chat_id,answer);return {"ok":True}
   if msg.get("photo"):
    label=label_from_caption(caption);data,_=await tg_download(msg["photo"][-1]["file_id"]);path=await save_media(sender,"image","telegram-photo.jpg",data,"image/jpeg",label=label);description=clean_model_text(await describe_image(path,"Describe the image objectively. Do not discuss whether you can save files. Extract useful visible text if present."));set_media_details(path,label,description)
-   memory_name=label or "received image";save_memory(sender,f"Photo '{memory_name}': {description}",category="image",importance=.7 if label else .55,source="vision")
-   if label:await tg_send(chat_id,f"✅ Saved as \"{label}\".\n\n{description}")
-   else:await tg_send(chat_id,description)
-   return {"ok":True}
+   save_memory(sender,f"Photo '{label or 'received image'}': {description}",category="image",importance=.7 if label else .55,source="vision")
+   await tg_send(chat_id,(f"✅ Saved as \"{label}\".\n\n" if label else "")+description);return {"ok":True}
   if msg.get("document"):
    d=msg["document"];original=Path(d.get("file_name") or "document").name;ext=Path(original).suffix.lower();data,_=await tg_download(d["file_id"])
    if ext in IMAGE_EXTENSIONS:
-    label=label_from_caption(caption);path=await save_media(sender,"image",original,data,d.get("mime_type","image/jpeg"),label=label);description=clean_model_text(await describe_image(path,"Describe the image objectively. Do not discuss whether you can save files. Extract useful visible text if present."));set_media_details(path,label,description);save_memory(sender,f"Photo '{label or original}': {description}",category="image",importance=.7 if label else .55,source="vision")
-    if label:await tg_send(chat_id,f"✅ Saved as \"{label}\".\n\n{description}")
-    else:await tg_send(chat_id,description)
-    return {"ok":True}
+    label=label_from_caption(caption);path=await save_media(sender,"image",original,data,d.get("mime_type","image/jpeg"),label=label);description=clean_model_text(await describe_image(path,"Describe the image objectively. Do not discuss whether you can save files. Extract useful visible text if present."));set_media_details(path,label,description);save_memory(sender,f"Photo '{label or original}': {description}",category="image",importance=.7 if label else .55,source="vision");await tg_send(chat_id,(f"✅ Saved as \"{label}\".\n\n" if label else "")+description);return {"ok":True}
    if ext in AUDIO_EXTENSIONS:
     path=await save_media(sender,"audio",original,data,d.get("mime_type","audio/ogg"));transcript=await transcribe_audio(path)
     with db() as c:c.execute("UPDATE media SET description=? WHERE path=?",(transcript,str(path)))
@@ -155,11 +149,16 @@ async def telegram_webhook(req:Request):
    return {"ok":True}
   text=(msg.get("text") or "").strip()
   if text:
+   new_label=followup_label(text)
+   if new_label:
+    item=rename_latest_media(sender,new_label)
+    if item:
+     save_memory(sender,f"The most recently received photo is named '{new_label}'.",category="image",importance=.8,source="explicit");await tg_send(chat_id,f"✅ Saved the last photo as \"{new_label}\".");return {"ok":True}
+    await tg_send(chat_id,"I don't have a recent photo to name yet.");return {"ok":True}
    query=media_request(text)
    if query:
     item=find_media(sender,query)
-    if item and Path(item['path']).exists():
-     await tg_send_photo(chat_id,item['path'],f"📷 {item['label'] or item['original_name']}");log("telegram",sender,"media_retrieval",query);return {"ok":True}
+    if item and Path(item['path']).exists():await tg_send_photo(chat_id,item['path'],f"📷 {item['label'] or item['original_name']}");log("telegram",sender,"media_retrieval",query);return {"ok":True}
     await tg_send(chat_id,f"I couldn't find a saved photo matching \"{query}\".");return {"ok":True}
    answer=await process_text("telegram",sender,text);await tg_send(chat_id,answer)
   return {"ok":True}
@@ -168,4 +167,4 @@ async def telegram_webhook(req:Request):
   if chat_id:await tg_send(chat_id,f"I couldn't process that request. Server error: {type(e).__name__}")
   return {"ok":True}
 @app.get("/health")
-def health():return {"ok":True,"app":APP_NAME,"telegram_configured":bool(TELEGRAM_BOT_TOKEN and TELEGRAM_OWNER_ID),"provider":os.getenv("LLM_PROVIDER","gemini"),"semantic_memory":True,"vision":True,"voice":True,"dashboard":True,"commands":True,"cross_media_search":True,"memory_consolidation":True,"active_reminders":True,"automatic_daily_brief":DAILY_BRIEF_ENABLED,"named_media_retrieval":True}
+def health():return {"ok":True,"app":APP_NAME,"telegram_configured":bool(TELEGRAM_BOT_TOKEN and TELEGRAM_OWNER_ID),"provider":os.getenv("LLM_PROVIDER","gemini"),"semantic_memory":True,"vision":True,"voice":True,"dashboard":True,"commands":True,"cross_media_search":True,"memory_consolidation":True,"active_reminders":True,"automatic_daily_brief":DAILY_BRIEF_ENABLED,"named_media_retrieval":True,"conversational_media_context":True}
