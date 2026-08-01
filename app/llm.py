@@ -1,11 +1,11 @@
 import os,httpx,asyncio
-from .memory import search_memories,search_documents,recent_conversation
+from .memory import search_memories,search_documents,recent_conversation,latest_document_context,contextual_document_question
 from .knowledge import search_media
-SYSTEM="""You are Personal AI OS, a private personal assistant. Use supplied long-term memory, documents, media knowledge and recent conversation when relevant. Never invent a remembered fact. Clearly distinguish memory from document/media evidence. If context is insufficient, say so. Keep private data private. When using document excerpts, name the source filename. Prefer concise, useful answers."""
+SYSTEM="""You are Personal AI OS, a private personal assistant. Use supplied long-term memory, documents, media knowledge and recent conversation when relevant. Never invent a remembered fact. Clearly distinguish memory from document/media evidence. If context is insufficient, say so. Keep private data private. When using document excerpts, name the source filename. If RECENT DOCUMENT is supplied and the user's question naturally refers to the current/last document, prioritize that evidence over unrelated documents. Prefer concise, useful answers."""
 def build_prompt(owner_id,message):
- memories=search_memories(owner_id,message);docs=search_documents(owner_id,message);media=search_media(owner_id,message);recent=recent_conversation(owner_id)
- mem="\n".join(f"- {r['content']}" for r in memories) or "(none)";doc="\n\n".join(f"SOURCE {r['original_name']}:\n{r['content']}" for r in docs) or "(none)";med="\n\n".join(f"MEDIA {r['original_name']} ({r['media_type']}):\n{r['description']}" for r in media) or "(none)";hist="\n".join(f"{r['role'].upper()}: {r['content']}" for r in recent[-12:]) or "(none)"
- return f"{SYSTEM}\n\nLONG-TERM MEMORY:\n{mem}\n\nDOCUMENT CONTEXT:\n{doc}\n\nMEDIA KNOWLEDGE:\n{med}\n\nRECENT CHAT:\n{hist}\n\nUSER:\n{message}"
+ memories=search_memories(owner_id,message);prefer_latest=contextual_document_question(message);docs=search_documents(owner_id,message,prefer_latest=prefer_latest);latest=latest_document_context(owner_id) if prefer_latest else [];media=search_media(owner_id,message);recent=recent_conversation(owner_id)
+ mem="\n".join(f"- {r['content']}" for r in memories) or "(none)";doc="\n\n".join(f"SOURCE {r['original_name']}:\n{r['content']}" for r in docs) or "(none)";current="\n\n".join(f"CURRENT SOURCE {r['original_name']}:\n{r['content']}" for r in latest) or "(none)";med="\n\n".join(f"MEDIA {r['original_name']} ({r['media_type']}):\n{r['description']}" for r in media) or "(none)";hist="\n".join(f"{r['role'].upper()}: {r['content']}" for r in recent[-12:]) or "(none)"
+ return f"{SYSTEM}\n\nLONG-TERM MEMORY:\n{mem}\n\nRECENT DOCUMENT (prioritize for natural follow-up questions):\n{current}\n\nDOCUMENT SEARCH CONTEXT:\n{doc}\n\nMEDIA KNOWLEDGE:\n{med}\n\nRECENT CHAT:\n{hist}\n\nUSER:\n{message}"
 async def gemini(prompt):
  key=os.getenv("GEMINI_API_KEY","").strip()
  if not key:raise RuntimeError("GEMINI_API_KEY is not configured")
