@@ -19,18 +19,33 @@ def label_from_caption(caption):
             if label:return label[:120]
     return ""
 
+def followup_label(text):
+    s=(text or "").strip()
+    m=re.match(r"^(?:save|remember|store)\s+(?:that|it|this|that photo|this photo|that image|this image)\s+(?:as|named|name it)\s+(.+?)[.!?]*$",s,re.I)
+    return m.group(1).strip(" .\"'")[:120] if m else ""
+
 def media_request(text):
     s=(text or "").strip()
-    m=re.match(r"^(?:show|send|share|give)\s+(?:me\s+)?(?:the\s+)?(.+?)(?:\s+(?:photo|image|picture))?[.!?]*$",s,re.I)
+    if re.match(r"^(?:show|send|share|give)\s+(?:me\s+)?(?:that|it|this|that photo|this photo|that image|this image)(?:\s+again)?[.!?]*$",s,re.I):return "__latest__"
+    m=re.match(r"^(?:show|send|share|give)\s+(?:me\s+)?(?:the\s+)?(.+?)(?:\s+(?:photo|image|picture))?(?:\s+again)?[.!?]*$",s,re.I)
     if not m:return None
     q=m.group(1).strip(" .\"'")
     q=re.sub(r"^(?:my|the)\s+","",q,flags=re.I).strip()
     return q or None
 
+def latest_media(owner_id,media_type="image"):
+    with db() as c:return c.execute("SELECT * FROM media WHERE owner_id=? AND media_type=? ORDER BY id DESC LIMIT 1",(str(owner_id),media_type)).fetchone()
+
+def rename_latest_media(owner_id,label):
+    item=latest_media(owner_id,"image")
+    if not item:return None
+    with db() as c:c.execute("UPDATE media SET label=? WHERE id=?",(label,item['id']))
+    return item
+
 def find_media(owner_id,query):
+    if query=="__latest__":return latest_media(owner_id,"image")
     q=(query or "").strip().lower()
-    with db() as c:
-        rows=c.execute("SELECT * FROM media WHERE owner_id=? AND media_type='image' ORDER BY id DESC LIMIT 100",(str(owner_id),)).fetchall()
+    with db() as c:rows=c.execute("SELECT * FROM media WHERE owner_id=? AND media_type='image' ORDER BY id DESC LIMIT 100",(str(owner_id),)).fetchall()
     if not rows:return None
     def score(r):
         label=(r['label'] or '').lower();name=(r['original_name'] or '').lower();desc=(r['description'] or '').lower()
