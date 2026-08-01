@@ -3,6 +3,7 @@ from .tasks import task_command
 from .briefing import daily_brief
 from .system_health import health_text
 from .backups import create_backup,backup_status,BACKUP_DIR
+from .image_generation import image_prompt,generate_store_send
 HELP="""Personal AI OS commands:
 /help - show commands
 /status - system knowledge counts
@@ -13,6 +14,7 @@ HELP="""Personal AI OS commands:
 /memory - show recent saved memories
 /files - show indexed documents
 /media - show recent images/audio
+/image <prompt> - generate an AI image and send it here
 /todo <task> - add a task
 /tasks - list open tasks
 /tasks all - include completed tasks
@@ -20,12 +22,20 @@ HELP="""Personal AI OS commands:
 /deltask <id> - delete a task
 /clearhistory - clear conversation history (keeps memory/files/tasks)
 
+You can also say: Generate an image of..., Create an image of..., Make an image of..., or Draw...
+
 Natural-language controls:
 Remember that ...
 Forget ...
 Remind me to ... tomorrow at 5 pm
 Remind me to ... every day at 9 am"""
 def command_response(owner_id,text):
+ prompt=image_prompt(text)
+ if prompt is not None:
+  if not prompt:return "Usage: /image <describe the image you want>"
+  try:
+   path=generate_store_send(owner_id,prompt);return f"IMAGE_SENT:{path.name}"
+  except Exception as e:return f"Image generation failed: {type(e).__name__}: {e}"
  task=task_command(owner_id,text)
  if task is not None:return task
  cmd=text.strip().split()[0].lower() if text.strip() else ""
@@ -36,13 +46,10 @@ def command_response(owner_id,text):
    p=create_backup();return f"Backup created successfully.\n{p.name}\n{p.stat().st_size/1024/1024:.2f} MB" if p else "Backup could not be created because the database does not exist."
   except Exception as e:return f"Backup failed: {type(e).__name__}: {e}"
  if cmd=="/backups":
-  files=sorted(BACKUP_DIR.glob('personal-ai-os-backup-*.zip'),reverse=True)[:10]
-  listing='\n'.join(f"• {p.name} — {p.stat().st_size/1024/1024:.2f} MB" for p in files) if files else 'No backups found.'
-  return backup_status()+"\n\nRecent backups:\n"+listing
+  files=sorted(BACKUP_DIR.glob('personal-ai-os-backup-*.zip'),reverse=True)[:10];listing='\n'.join(f"• {p.name} — {p.stat().st_size/1024/1024:.2f} MB" for p in files) if files else 'No backups found.';return backup_status()+"\n\nRecent backups:\n"+listing
  if cmd=="/brief":return daily_brief(owner_id)
  if cmd=="/status":
-  with db() as c:
-   m=c.execute("SELECT COUNT(*) n FROM memories WHERE owner_id=?",(str(owner_id),)).fetchone()["n"];d=c.execute("SELECT COUNT(*) n FROM documents WHERE owner_id=?",(str(owner_id),)).fetchone()["n"];media=c.execute("SELECT COUNT(*) n FROM media WHERE owner_id=?",(str(owner_id),)).fetchone()["n"];conv=c.execute("SELECT COUNT(*) n FROM conversations WHERE sender_id=?",(str(owner_id),)).fetchone()["n"];tasks=c.execute("SELECT COUNT(*) n FROM tasks WHERE owner_id=? AND status='open'",(str(owner_id),)).fetchone()["n"]
+  with db() as c:m=c.execute("SELECT COUNT(*) n FROM memories WHERE owner_id=?",(str(owner_id),)).fetchone()["n"];d=c.execute("SELECT COUNT(*) n FROM documents WHERE owner_id=?",(str(owner_id),)).fetchone()["n"];media=c.execute("SELECT COUNT(*) n FROM media WHERE owner_id=?",(str(owner_id),)).fetchone()["n"];conv=c.execute("SELECT COUNT(*) n FROM conversations WHERE sender_id=?",(str(owner_id),)).fetchone()["n"];tasks=c.execute("SELECT COUNT(*) n FROM tasks WHERE owner_id=? AND status='open'",(str(owner_id),)).fetchone()["n"]
   return f"🧠 Memories: {m}\n📄 Documents: {d}\n🖼 Media: {media}\n💬 Stored messages: {conv}\n✅ Open tasks: {tasks}"
  if cmd=="/memory":
   with db() as c:rows=c.execute("SELECT content FROM memories WHERE owner_id=? ORDER BY updated_at DESC LIMIT 15",(str(owner_id),)).fetchall()
