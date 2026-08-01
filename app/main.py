@@ -3,7 +3,7 @@ from pathlib import Path
 import httpx
 from fastapi import FastAPI,Request,UploadFile,File,Form,Header,HTTPException
 from fastapi.responses import HTMLResponse,FileResponse,RedirectResponse
-from .config import APP_NAME,ADMIN_TOKEN,UPLOAD_DIR,MAX_UPLOAD_BYTES,TELEGRAM_OWNER_ID,TELEGRAM_BOT_TOKEN
+from .config import APP_NAME,ADMIN_TOKEN,UPLOAD_DIR,MAX_UPLOAD_BYTES,TELEGRAM_OWNER_ID,TELEGRAM_BOT_TOKEN,DAILY_BRIEF_ENABLED,DAILY_BRIEF_HOUR,DAILY_BRIEF_MINUTE
 from .db import init_db,db
 from .storage import extract_text,chunks,ALLOWED
 from .memory import save_memory,explicit_memory,auto_memory_candidates,forget_target,forget_memories,index_chunk_embedding
@@ -14,14 +14,18 @@ from .dashboard import dashboard_html
 from .commands import command_response
 from .summarizer import consolidate_conversation
 from .reminders import reminder_worker
+from .proactive import daily_brief_worker
 app=FastAPI(title=APP_NAME);init_db()
 @app.on_event("startup")
 async def start_background_services():
- if TELEGRAM_BOT_TOKEN and TELEGRAM_OWNER_ID:app.state.reminder_task=asyncio.create_task(reminder_worker(tg_send,TELEGRAM_OWNER_ID))
+ if TELEGRAM_BOT_TOKEN and TELEGRAM_OWNER_ID:
+  app.state.reminder_task=asyncio.create_task(reminder_worker(tg_send,TELEGRAM_OWNER_ID))
+  if DAILY_BRIEF_ENABLED:app.state.brief_task=asyncio.create_task(daily_brief_worker(tg_send,TELEGRAM_OWNER_ID,DAILY_BRIEF_HOUR,DAILY_BRIEF_MINUTE))
 @app.on_event("shutdown")
 async def stop_background_services():
- task=getattr(app.state,"reminder_task",None)
- if task:task.cancel()
+ for name in ("reminder_task","brief_task"):
+  task=getattr(app.state,name,None)
+  if task:task.cancel()
 def admin_ok(token):return bool(ADMIN_TOKEN and token==ADMIN_TOKEN)
 def log(channel,sender,event,detail=""):
  with db() as c:c.execute("INSERT INTO audit_logs(channel,sender_id,event,detail) VALUES(?,?,?,?)",(channel,str(sender),event,detail[:3000]))
@@ -141,4 +145,4 @@ async def telegram_webhook(req:Request):
   if chat_id:await tg_send(chat_id,f"I couldn't process that request. Server error: {type(e).__name__}")
   return {"ok":True}
 @app.get("/health")
-def health():return {"ok":True,"app":APP_NAME,"telegram_configured":bool(TELEGRAM_BOT_TOKEN and TELEGRAM_OWNER_ID),"provider":os.getenv("LLM_PROVIDER","gemini"),"semantic_memory":True,"vision":True,"voice":True,"dashboard":True,"commands":True,"cross_media_search":True,"memory_consolidation":True,"active_reminders":True}
+def health():return {"ok":True,"app":APP_NAME,"telegram_configured":bool(TELEGRAM_BOT_TOKEN and TELEGRAM_OWNER_ID),"provider":os.getenv("LLM_PROVIDER","gemini"),"semantic_memory":True,"vision":True,"voice":True,"dashboard":True,"commands":True,"cross_media_search":True,"memory_consolidation":True,"active_reminders":True,"automatic_daily_brief":DAILY_BRIEF_ENABLED}
