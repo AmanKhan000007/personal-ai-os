@@ -1,4 +1,4 @@
-import os,html,uuid
+import os,html,uuid,asyncio
 from pathlib import Path
 import httpx
 from fastapi import FastAPI,Request,UploadFile,File,Form,Header,HTTPException
@@ -13,7 +13,15 @@ from .voice import transcribe_audio,AUDIO_EXTENSIONS
 from .dashboard import dashboard_html
 from .commands import command_response
 from .summarizer import consolidate_conversation
+from .reminders import reminder_worker
 app=FastAPI(title=APP_NAME);init_db()
+@app.on_event("startup")
+async def start_background_services():
+ if TELEGRAM_BOT_TOKEN and TELEGRAM_OWNER_ID:app.state.reminder_task=asyncio.create_task(reminder_worker(tg_send,TELEGRAM_OWNER_ID))
+@app.on_event("shutdown")
+async def stop_background_services():
+ task=getattr(app.state,"reminder_task",None)
+ if task:task.cancel()
 def admin_ok(token):return bool(ADMIN_TOKEN and token==ADMIN_TOKEN)
 def log(channel,sender,event,detail=""):
  with db() as c:c.execute("INSERT INTO audit_logs(channel,sender_id,event,detail) VALUES(?,?,?,?)",(channel,str(sender),event,detail[:3000]))
@@ -133,4 +141,4 @@ async def telegram_webhook(req:Request):
   if chat_id:await tg_send(chat_id,f"I couldn't process that request. Server error: {type(e).__name__}")
   return {"ok":True}
 @app.get("/health")
-def health():return {"ok":True,"app":APP_NAME,"telegram_configured":bool(TELEGRAM_BOT_TOKEN and TELEGRAM_OWNER_ID),"provider":os.getenv("LLM_PROVIDER","gemini"),"semantic_memory":True,"vision":True,"voice":True,"dashboard":True,"commands":True,"cross_media_search":True,"memory_consolidation":True}
+def health():return {"ok":True,"app":APP_NAME,"telegram_configured":bool(TELEGRAM_BOT_TOKEN and TELEGRAM_OWNER_ID),"provider":os.getenv("LLM_PROVIDER","gemini"),"semantic_memory":True,"vision":True,"voice":True,"dashboard":True,"commands":True,"cross_media_search":True,"memory_consolidation":True,"active_reminders":True}
