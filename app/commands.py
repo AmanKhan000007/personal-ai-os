@@ -1,9 +1,11 @@
 from .db import db
 from .tasks import task_command
 from .briefing import daily_brief
+from .system_health import health_text
 HELP="""Personal AI OS commands:
 /help - show commands
 /status - system knowledge counts
+/system - storage/database integrity check
 /brief - today's personal briefing
 /memory - show recent saved memories
 /files - show indexed documents
@@ -25,6 +27,7 @@ def command_response(owner_id,text):
  if task is not None:return task
  cmd=text.strip().split()[0].lower() if text.strip() else ""
  if cmd=="/help":return HELP
+ if cmd=="/system":return health_text()
  if cmd=="/brief":return daily_brief(owner_id)
  if cmd=="/status":
   with db() as c:
