@@ -4,6 +4,7 @@ from .briefing import daily_brief
 from .system_health import health_text
 from .backups import create_backup,backup_status,BACKUP_DIR
 from .image_generation import image_prompt,generate_store_send
+from .image_editing import edit_instruction,edit_latest_store_send
 HELP="""Personal AI OS commands:
 /help - show commands
 /status - system knowledge counts
@@ -15,6 +16,7 @@ HELP="""Personal AI OS commands:
 /files - show indexed documents
 /media - show recent images/audio
 /image <prompt> - generate an AI image and send it here
+/edit <instruction> - edit your most recent image and send the new version
 /todo <task> - add a task
 /tasks - list open tasks
 /tasks all - include completed tasks
@@ -22,7 +24,11 @@ HELP="""Personal AI OS commands:
 /deltask <id> - delete a task
 /clearhistory - clear conversation history (keeps memory/files/tasks)
 
-You can also say: Generate an image of..., Create an image of..., Make an image of..., or Draw...
+Image examples:
+/image premium white sneaker in a luxury studio
+/edit remove the background
+/edit change the shoes to white
+/edit make it look like a premium advertisement
 
 Natural-language controls:
 Remember that ...
@@ -30,6 +36,12 @@ Forget ...
 Remind me to ... tomorrow at 5 pm
 Remind me to ... every day at 9 am"""
 def command_response(owner_id,text):
+ edit=edit_instruction(text)
+ if edit is not None:
+  if not edit:return "Usage: /edit <describe the change you want>. Send a photo first, then use /edit."
+  try:
+   path=edit_latest_store_send(owner_id,edit);return f"IMAGE_EDIT_SENT:{path.name}"
+  except Exception as e:return f"Image editing failed: {type(e).__name__}: {e}"
  prompt=image_prompt(text)
  if prompt is not None:
   if not prompt:return "Usage: /image <describe the image you want>"
