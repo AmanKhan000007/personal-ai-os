@@ -11,6 +11,7 @@ from .llm import ask
 from .vision import describe_image,IMAGE_EXTENSIONS
 from .voice import transcribe_audio,AUDIO_EXTENSIONS
 from .dashboard import dashboard_html
+from .commands import command_response
 app=FastAPI(title=APP_NAME);init_db()
 def admin_ok(token):return bool(ADMIN_TOKEN and token==ADMIN_TOKEN)
 def log(channel,sender,event,detail=""):
@@ -43,6 +44,8 @@ async def save_media(owner_id,media_type,original,data,mime,description=""):
  with db() as c:c.execute("INSERT INTO media(owner_id,media_type,original_name,stored_name,path,mime_type,size_bytes,description) VALUES(?,?,?,?,?,?,?,?)",(str(owner_id),media_type,original,stored,str(path),mime,len(data),description))
  return path
 async def process_text(channel,owner_id,text):
+ cmd=command_response(owner_id,text)
+ if cmd is not None:return cmd
  save_chat(channel,owner_id,"user",text);forget=forget_target(text)
  if forget:
   n=forget_memories(owner_id,forget);answer=f"Forgot {n} matching memory item(s)." if n else "I couldn't find a matching saved memory to forget.";save_chat(channel,owner_id,"assistant",answer);return answer
@@ -122,4 +125,4 @@ async def telegram_webhook(req:Request):
   if chat_id:await tg_send(chat_id,f"I couldn't process that request. Server error: {type(e).__name__}")
   return {"ok":True}
 @app.get("/health")
-def health():return {"ok":True,"app":APP_NAME,"telegram_configured":bool(TELEGRAM_BOT_TOKEN and TELEGRAM_OWNER_ID),"provider":os.getenv("LLM_PROVIDER","gemini"),"semantic_memory":True,"vision":True,"voice":True,"dashboard":True}
+def health():return {"ok":True,"app":APP_NAME,"telegram_configured":bool(TELEGRAM_BOT_TOKEN and TELEGRAM_OWNER_ID),"provider":os.getenv("LLM_PROVIDER","gemini"),"semantic_memory":True,"vision":True,"voice":True,"dashboard":True,"commands":True,"cross_media_search":True}
