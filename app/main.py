@@ -12,6 +12,7 @@ from .vision import describe_image,IMAGE_EXTENSIONS
 from .voice import transcribe_audio,AUDIO_EXTENSIONS
 from .dashboard import dashboard_html
 from .commands import command_response
+from .summarizer import consolidate_conversation
 app=FastAPI(title=APP_NAME);init_db()
 def admin_ok(token):return bool(ADMIN_TOKEN and token==ADMIN_TOKEN)
 def log(channel,sender,event,detail=""):
@@ -53,7 +54,14 @@ async def process_text(channel,owner_id,text):
  if explicit:save_memory(owner_id,explicit,importance=.95,source="explicit")
  else:
   for candidate in auto_memory_candidates(text):save_memory(owner_id,candidate,importance=.7,confidence=.85,source="automatic")
- answer,provider=await ask(owner_id,text);save_chat(channel,owner_id,"assistant",answer);log(channel,owner_id,"chat",provider);return answer
+ answer,provider=await ask(owner_id,text);save_chat(channel,owner_id,"assistant",answer);log(channel,owner_id,"chat",provider)
+ with db() as c:count=c.execute("SELECT COUNT(*) n FROM conversations WHERE sender_id=?",(str(owner_id),)).fetchone()["n"]
+ if count and count%30==0:
+  try:
+   result=await consolidate_conversation(owner_id,ask)
+   if result:log(channel,owner_id,"memory_consolidation",str(result))
+  except Exception as e:log(channel,owner_id,"memory_consolidation_error",str(e))
+ return answer
 CSS="body{font-family:Arial,sans-serif;background:#f5f6f8;color:#18202a;margin:0}.wrap{max-width:900px;margin:40px auto;padding:18px}.card{background:white;padding:22px;border-radius:14px;margin:16px 0;border:1px solid #ddd}textarea,input{box-sizing:border-box;width:100%;padding:12px;margin:6px 0;border:1px solid #bbb;border-radius:8px}button{padding:12px 20px;background:#18202a;color:white;border:0;border-radius:8px}pre{white-space:pre-wrap}.muted{color:#66717e}a{color:#174ea6}"
 @app.get("/",response_class=HTMLResponse)
 def home():return f"<html><head><meta name=viewport content='width=device-width'><style>{CSS}</style></head><body><div class=wrap><h1>{html.escape(APP_NAME)}</h1><p class=muted>Private AI with semantic memory, documents, vision and voice.</p><div class=card><h2>Chat</h2><form method=post action=/playground><textarea name=message required></textarea><input type=password name=admin_token required placeholder='Admin token'><button>Ask</button></form></div><div class=card><h2>Upload document</h2><form method=post action=/upload enctype=multipart/form-data><input type=file name=file required><input type=password name=admin_token required placeholder='Admin token'><button>Upload</button></form></div><div class=card><h2>Dashboard</h2><form method=get action=/dashboard><input type=password name=admin_token required placeholder='Admin token'><button>Open Dashboard</button></form></div></div></body></html>"
@@ -125,4 +133,4 @@ async def telegram_webhook(req:Request):
   if chat_id:await tg_send(chat_id,f"I couldn't process that request. Server error: {type(e).__name__}")
   return {"ok":True}
 @app.get("/health")
-def health():return {"ok":True,"app":APP_NAME,"telegram_configured":bool(TELEGRAM_BOT_TOKEN and TELEGRAM_OWNER_ID),"provider":os.getenv("LLM_PROVIDER","gemini"),"semantic_memory":True,"vision":True,"voice":True,"dashboard":True,"commands":True,"cross_media_search":True}
+def health():return {"ok":True,"app":APP_NAME,"telegram_configured":bool(TELEGRAM_BOT_TOKEN and TELEGRAM_OWNER_ID),"provider":os.getenv("LLM_PROVIDER","gemini"),"semantic_memory":True,"vision":True,"voice":True,"dashboard":True,"commands":True,"cross_media_search":True,"memory_consolidation":True}
