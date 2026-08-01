@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS document_chunks (id INTEGER PRIMARY KEY AUTOINCREMENT
 CREATE INDEX IF NOT EXISTS idx_chunks_doc ON document_chunks(document_id,chunk_index);
 CREATE TABLE IF NOT EXISTS chunk_embeddings (chunk_id INTEGER PRIMARY KEY,vector TEXT NOT NULL,FOREIGN KEY(chunk_id) REFERENCES document_chunks(id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS media (id INTEGER PRIMARY KEY AUTOINCREMENT,owner_id TEXT NOT NULL,media_type TEXT NOT NULL,original_name TEXT NOT NULL,stored_name TEXT NOT NULL,path TEXT NOT NULL,mime_type TEXT,size_bytes INTEGER NOT NULL,description TEXT NOT NULL DEFAULT '',created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
-CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY AUTOINCREMENT,owner_id TEXT NOT NULL,title TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'open',due_at TEXT,source TEXT NOT NULL DEFAULT 'chat',created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,completed_at TEXT);
+CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY AUTOINCREMENT,owner_id TEXT NOT NULL,title TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'open',due_at TEXT,source TEXT NOT NULL DEFAULT 'chat',created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,completed_at TEXT,notified_at TEXT);
 CREATE INDEX IF NOT EXISTS idx_tasks_owner ON tasks(owner_id,status,due_at);
 CREATE TABLE IF NOT EXISTS audit_logs (id INTEGER PRIMARY KEY AUTOINCREMENT,channel TEXT NOT NULL,sender_id TEXT NOT NULL,event TEXT NOT NULL,detail TEXT NOT NULL DEFAULT '',created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 """
@@ -26,4 +26,7 @@ def db():
  except Exception:conn.rollback();raise
  finally:conn.close()
 def init_db():
- with db() as conn:conn.executescript(SCHEMA)
+ with db() as conn:
+  conn.executescript(SCHEMA)
+  cols={r['name'] for r in conn.execute("PRAGMA table_info(tasks)").fetchall()}
+  if 'notified_at' not in cols:conn.execute("ALTER TABLE tasks ADD COLUMN notified_at TEXT")
